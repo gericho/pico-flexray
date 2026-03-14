@@ -7,6 +7,8 @@
 #include "flexray_frame.h"
 #include "flexray_fifo.h"
 #include "flexray_forwarder_with_injector.h"
+#include "can_bus.h"
+#include <stdio.h>
 #include <string.h>
 
 // Add near top after includes
@@ -14,6 +16,19 @@ static absolute_time_t last_usb_activity = 0;
 
 // FlexRay FIFO
 static flexray_fifo_t flexray_fifo;
+
+#define CAN_PACKET_HEAD_SIZE 6u
+#define PICO_CAN_BUS 2u
+
+typedef struct {
+    uint32_t ptr;
+    uint32_t tail_size;
+    uint8_t data[72];
+} usb_can_asm_buffer_t;
+
+static const uint8_t dlc_to_len[] = {0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 12u, 16u, 20u, 24u, 32u, 48u, 64u};
+
+static usb_can_asm_buffer_t can_write_buffer = {0};
 
 // For delayed reset/bootloader
 static bool pending_reset = false;
@@ -33,6 +48,81 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
 static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request);
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
 static bool try_send_from_fifo(const char *context);
+static void handle_panda_can_tx_buffer(const uint8_t *data, uint16_t len);
+static bool try_send_can_packets(void);
+static bool try_send_flexray_packets(void);
+
+static uint8_t calculate_can_checksum(const uint8_t *data, uint32_t len)
+{
+    uint8_t checksum = 0u;
+    for (uint32_t i = 0; i < len; ++i) {
+        checksum ^= data[i];
+    }
+    return checksum;
+}
+
+static bool can_packet_decode(const uint8_t *packet, uint32_t packet_len, can_bus_frame_t *frame)
+{
+    if (!frame || packet_len < CAN_PACKET_HEAD_SIZE) {
+        return false;
+    }
+
+    uint8_t data_len_code = packet[0] >> 4;
+    uint8_t data_len = dlc_to_len[data_len_code & 0x0fu];
+    if (packet_len != (uint32_t)CAN_PACKET_HEAD_SIZE + data_len) {
+        return false;
+    }
+    if (calculate_can_checksum(packet, packet_len) != 0u) {
+        return false;
+    }
+
+    uint8_t bus = (packet[0] >> 1) & 0x7u;
+    bool fd = (packet[0] & 0x1u) != 0u;
+    uint32_t word = (uint32_t)packet[1]
+                  | ((uint32_t)packet[2] << 8)
+                  | ((uint32_t)packet[3] << 16)
+                  | ((uint32_t)packet[4] << 24);
+
+    if (fd || (bus != 0u && bus != PICO_CAN_BUS) || data_len > 8u) {
+        return false;
+    }
+
+    memset(frame, 0, sizeof(*frame));
+    frame->extended = ((word >> 2) & 0x1u) != 0u;
+    frame->id = word >> 3;
+    frame->dlc = data_len;
+    frame->rtr = false;
+    if (data_len > 0u) {
+        memcpy(frame->data, &packet[CAN_PACKET_HEAD_SIZE], data_len);
+    }
+    return true;
+}
+
+static uint32_t can_packet_encode(const can_bus_frame_t *frame, uint8_t *packet, uint32_t packet_cap)
+{
+    if (!frame || !packet || frame->dlc > 8u) {
+        return 0u;
+    }
+
+    uint32_t packet_len = CAN_PACKET_HEAD_SIZE + frame->dlc;
+    if (packet_cap < packet_len) {
+        return 0u;
+    }
+
+    uint32_t word = (frame->id << 3) | (frame->extended ? (1u << 2) : 0u);
+
+    packet[0] = (uint8_t)((frame->dlc << 4) | (PICO_CAN_BUS << 1) | 0u);
+    packet[1] = (uint8_t)(word & 0xffu);
+    packet[2] = (uint8_t)((word >> 8) & 0xffu);
+    packet[3] = (uint8_t)((word >> 16) & 0xffu);
+    packet[4] = (uint8_t)((word >> 24) & 0xffu);
+    packet[5] = 0u;
+    if (frame->dlc > 0u) {
+        memcpy(&packet[CAN_PACKET_HEAD_SIZE], frame->data, frame->dlc);
+    }
+    packet[5] = calculate_can_checksum(packet, packet_len);
+    return packet_len;
+}
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -41,6 +131,9 @@ static bool try_send_from_fifo(const char *context);
 //    - len must equal rule.replace_len
 //  op 0x91: Set injector enable
 //    [0x91][u8 enabled]
+//  op 0xA0: Send one classical CAN frame on the external MCP2518FD bus
+//    [0xA0][u8 flags][u32 id_le][u8 dlc][0..8 data bytes]
+//    - flags bit0 = extended, bit1 = rtr
 // ------------------------------------------------------------
 static void handle_vendor_out_payload(const uint8_t *data, uint16_t len)
 {
@@ -66,6 +159,36 @@ static void handle_vendor_out_payload(const uint8_t *data, uint16_t len)
             }
             bool en = data[off++] != 0;
             injector_set_enabled(en);
+        } else if (op == 0xA0) {
+            if ((uint16_t)(len - off) < 6) {
+                break;
+            }
+
+            can_bus_frame_t frame = {0};
+            uint8_t flags = data[off++];
+            frame.extended = (flags & 0x01u) != 0u;
+            frame.rtr = (flags & 0x02u) != 0u;
+            frame.id = (uint32_t)data[off]
+                     | ((uint32_t)data[off + 1] << 8)
+                     | ((uint32_t)data[off + 2] << 16)
+                     | ((uint32_t)data[off + 3] << 24);
+            off += 4;
+            frame.dlc = data[off++];
+
+            if (frame.dlc > 8u || (uint16_t)(len - off) < frame.dlc) {
+                break;
+            }
+
+            if (!frame.rtr && frame.dlc > 0u) {
+                memcpy(frame.data, &data[off], frame.dlc);
+            }
+            off += frame.dlc;
+
+            if (!can_bus_send_frame(&frame)) {
+                printf("CAN TX rejected ID=0x%lx DLC=%u\n",
+                       (unsigned long)frame.id,
+                       frame.dlc);
+            }
         } else if (op == 0x00) {
             continue;
         } else {
@@ -100,6 +223,7 @@ void panda_usb_init(void)
 void panda_usb_task(void)
 {
     tud_task();
+    (void)try_send_from_fifo("task");
 }
 
 // TinyUSB vendor control transfer callback - this overrides the weak default implementation
@@ -198,14 +322,25 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         break;
 
     case PANDA_GET_CAN_HEALTH_STATS:
-        struct can_health_t * can_health = (struct can_health_t*)response_data;
-        can_health->can_speed = 0;
-        can_health->can_data_speed = 0;
-        can_health->canfd_enabled = 0;
-        can_health->brs_enabled = 0;
-        can_health->canfd_non_iso = 0;
+        {
+            can_bus_status_t can_status;
+            struct can_health_t * can_health = (struct can_health_t*)response_data;
+            memset(can_health, 0, sizeof(*can_health));
+            can_bus_get_status(&can_status);
+            can_health->bus_off = can_status.bus_off ? 1u : 0u;
+            can_health->receive_error_cnt = can_status.rec;
+            can_health->transmit_error_cnt = can_status.tec;
+            can_health->total_error_cnt = can_status.error_count;
+            can_health->total_tx_cnt = can_status.tx_total;
+            can_health->total_rx_cnt = can_status.rx_total;
+            can_health->total_rx_lost_cnt = can_status.overflow_count;
+            can_health->can_speed = can_status.started ? (uint16_t)(can_status.bitrate / 1000u) : 0u;
+            can_health->can_data_speed = can_health->can_speed;
+            can_health->canfd_enabled = 0;
+            can_health->brs_enabled = 0;
+            can_health->canfd_non_iso = 0;
+        }
         response_len = sizeof(struct can_health_t);
-        memcpy(response_data, can_health, response_len);
         // printf("Control Read: GET_CAN_HEALTH_STATS\n");
         break;
 
@@ -309,6 +444,9 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     case PANDA_RESET_CAN_COMMS:
         // printf("Control Write: RESET_CAN_COMMS (request=0x%02x)\n", request->bRequest);
         flexray_fifo_init(&flexray_fifo);
+        can_bus_reset();
+        can_write_buffer.ptr = 0u;
+        can_write_buffer.tail_size = 0u;
         handled = true;
         break;
 
@@ -407,13 +545,15 @@ static bool handle_control_data_stage(tusb_control_request_t const *request, uin
             uint16_t bus_id = data[0] | (data[1] << 8);
             uint16_t speed_kbps = data[2] | (data[3] << 8);
 
-            if (bus_id < 3) // We support up to 3 CAN buses
+            if (bus_id == 0 || bus_id == PICO_CAN_BUS)
             {
-                printf("Control Data: SET_CAN_SPEED_KBPS bus=%d speed=%d kbps\n", bus_id, speed_kbps);
+                bool ok = can_bus_set_bitrate((uint32_t)speed_kbps * 1000u);
+                printf("Control Data: SET_CAN_SPEED_KBPS bus=%d speed=%d kbps -> %s\n",
+                       bus_id, speed_kbps, ok ? "applied" : "unsupported");
             }
             else
             {
-                printf("Control Data: SET_CAN_SPEED_KBPS invalid bus_id=%d\n", bus_id);
+                printf("Control Data: SET_CAN_SPEED_KBPS unsupported bus_id=%d\n", bus_id);
             }
         }
         else
@@ -492,17 +632,27 @@ void tud_resume_cb(void)
 // Invoked when received data from host via OUT endpoint
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 {
-    (void)itf;
+    if (itf > 1u) {
+        return;
+    }
+
     if (bufsize > 0)
     {
-        handle_vendor_out_payload(buffer, bufsize);
+        if (itf == 1u) {
+            handle_vendor_out_payload(buffer, bufsize);
+        } else {
+            handle_panda_can_tx_buffer(buffer, bufsize);
+        }
     }
-    // Drain any additional data queued by USB core
-    while (tud_vendor_available()) {
+    while (tud_vendor_n_available(itf)) {
         uint8_t tmp[256];
-        uint32_t n = tud_vendor_read(tmp, sizeof(tmp));
+        uint32_t n = tud_vendor_n_read(itf, tmp, sizeof(tmp));
         if (n == 0) break;
-        handle_vendor_out_payload(tmp, (uint16_t)n);
+        if (itf == 1u) {
+            handle_vendor_out_payload(tmp, (uint16_t)n);
+        } else {
+            handle_panda_can_tx_buffer(tmp, (uint16_t)n);
+        }
     }
     last_usb_activity = get_absolute_time();
 }
@@ -510,16 +660,18 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 // Invoked when a transfer on Bulk IN endpoint is complete
 void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes)
 {
-    (void)itf;
     (void)sent_bytes;
 
-    // After a transfer is complete, try to send the next batch of data
-    try_send_from_fifo("tx_cb trigger");
+    if (itf == 0u) {
+        (void)try_send_can_packets();
+    } else if (itf == 1u) {
+        (void)try_send_flexray_packets();
+    }
 }
 
 bool panda_flexray_fifo_push(const flexray_frame_t *frame)
 {
-    try_send_from_fifo("fifo_push");
+    (void)try_send_flexray_packets();
     return flexray_fifo_push(&flexray_fifo, frame);
 }
 
@@ -527,7 +679,57 @@ bool panda_flexray_fifo_push(const flexray_frame_t *frame)
 static bool try_send_from_fifo(const char *context)
 {
     (void)context;
-    if (!tud_vendor_mounted() || flexray_fifo_is_empty(&flexray_fifo))
+    if (!tud_vendor_n_mounted(0u) && !tud_vendor_n_mounted(1u)) {
+        return false;
+    }
+    bool sent_can = try_send_can_packets();
+    bool sent_flexray = try_send_flexray_packets();
+    return sent_can || sent_flexray;
+}
+
+static bool try_send_can_packets(void)
+{
+    if (!can_bus_is_started() || !tud_vendor_n_mounted(0u)) {
+        return false;
+    }
+
+    uint32_t available_space = tud_vendor_n_write_available(0u);
+    if (available_space < (CAN_PACKET_HEAD_SIZE + 8u)) {
+        return false;
+    }
+
+    bool sent_something = false;
+    while (available_space >= (CAN_PACKET_HEAD_SIZE + 8u)) {
+        can_bus_frame_t frame;
+        uint8_t packet[CAN_PACKET_HEAD_SIZE + 8u];
+        uint32_t packet_len;
+
+        if (!can_bus_pop_frame(&frame)) {
+            break;
+        }
+
+        packet_len = can_packet_encode(&frame, packet, sizeof(packet));
+        if ((packet_len == 0u) || (available_space < packet_len)) {
+            break;
+        }
+
+        if (tud_vendor_n_write(0u, packet, packet_len) != packet_len) {
+            break;
+        }
+
+        sent_something = true;
+        available_space = tud_vendor_n_write_available(0u);
+    }
+
+    if (sent_something) {
+        tud_vendor_n_write_flush(0u);
+    }
+    return sent_something;
+}
+
+static bool try_send_flexray_packets(void)
+{
+    if (!tud_vendor_n_mounted(1u) || flexray_fifo_is_empty(&flexray_fifo))
     {
         return false;
     }
@@ -535,7 +737,7 @@ static bool try_send_from_fifo(const char *context)
     // Minimum record: 2-byte length + 1-byte source + 5-byte header + 0 payload + 3-byte CRC = 11 bytes
     const uint32_t MIN_RECORD_SIZE = 11u;
 
-    uint32_t available_space = tud_vendor_write_available();
+    uint32_t available_space = tud_vendor_n_write_available(1u);
     if (available_space < MIN_RECORD_SIZE)
     {
         return false;
@@ -595,7 +797,7 @@ static bool try_send_from_fifo(const char *context)
         outbuf[w++] = (uint8_t)(frame.frame_crc & 0xFF);
 
         // Write
-        uint32_t written = tud_vendor_write(outbuf, (uint32_t)w);
+        uint32_t written = tud_vendor_n_write(1u, outbuf, (uint32_t)w);
         if (written != w)
         {
             // On partial write, stop loop; data will be retried next call
@@ -605,7 +807,7 @@ static bool try_send_from_fifo(const char *context)
         (void)flexray_fifo_pop(&flexray_fifo, &frame);
         sent_something = true;
         total_sent += written;
-        available_space = tud_vendor_write_available();
+        available_space = tud_vendor_n_write_available(1u);
 
         // If buffer space drops low, flush early to free FIFO in USB core
         if (available_space < MIN_RECORD_SIZE)
@@ -616,8 +818,61 @@ static bool try_send_from_fifo(const char *context)
 
     if (sent_something)
     {
-        tud_vendor_write_flush();
+        tud_vendor_n_write_flush(1u);
         return true;
     }
     return false;
+}
+
+static void handle_panda_can_tx_buffer(const uint8_t *data, uint16_t len)
+{
+    uint32_t pos = 0u;
+
+    if (can_write_buffer.ptr != 0u) {
+        if (can_write_buffer.tail_size <= (uint32_t)(len - pos)) {
+            can_bus_frame_t frame;
+            memcpy(&can_write_buffer.data[can_write_buffer.ptr], &data[pos], can_write_buffer.tail_size);
+            can_write_buffer.ptr += can_write_buffer.tail_size;
+            pos += can_write_buffer.tail_size;
+
+            if (can_packet_decode(can_write_buffer.data, can_write_buffer.ptr, &frame)) {
+                (void)can_bus_send_frame(&frame);
+            } else {
+                printf("CAN TX decode failed for split packet\n");
+            }
+
+            can_write_buffer.ptr = 0u;
+            can_write_buffer.tail_size = 0u;
+        } else {
+            uint32_t data_size = (uint32_t)len - pos;
+            memcpy(&can_write_buffer.data[can_write_buffer.ptr], &data[pos], data_size);
+            can_write_buffer.tail_size -= data_size;
+            can_write_buffer.ptr += data_size;
+            return;
+        }
+    }
+
+    while (pos < len) {
+        uint8_t dlc = data[pos] >> 4;
+        uint32_t packet_len = CAN_PACKET_HEAD_SIZE + dlc_to_len[dlc & 0x0fu];
+
+        if ((pos + packet_len) <= len) {
+            can_bus_frame_t frame;
+            if (can_packet_decode(&data[pos], packet_len, &frame)) {
+                if (!can_bus_send_frame(&frame)) {
+                    printf("CAN TX rejected ID=0x%lx DLC=%u\n",
+                           (unsigned long)frame.id, frame.dlc);
+                }
+            } else {
+                printf("CAN TX decode failed for inline packet\n");
+            }
+            pos += packet_len;
+        } else {
+            uint32_t remain = (uint32_t)len - pos;
+            memcpy(can_write_buffer.data, &data[pos], remain);
+            can_write_buffer.ptr = remain;
+            can_write_buffer.tail_size = packet_len - remain;
+            return;
+        }
+    }
 }

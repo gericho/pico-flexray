@@ -22,6 +22,7 @@
 #include "panda_usb.h"
 #include "flexray_bss_streamer.h"
 #include "flexray_forwarder_with_injector.h"
+#include "can_bus.h"
 
 #define SRAM __attribute__((section(".data")))
 #define FLASH __attribute__((section(".rodata")))
@@ -199,6 +200,7 @@ int main(void)
     }
 
     print_pin_assignments();
+    can_bus_init();
 
     printf("Actual system clock: %lu Hz\n", clock_get_hz(clk_sys));
     printf("\n--- FlexRay Continuous Streaming Bridge (Forwarder Mode) ---\n");
@@ -227,6 +229,7 @@ int main(void)
     while (true)
     {
         panda_usb_task();
+        can_bus_poll();
 		if (time_reached(next_led_toggle_time))
 		{
 			next_led_toggle_time = make_timeout_time_ms(500);
@@ -240,6 +243,24 @@ int main(void)
             prev_total = stats.len_ok;
             prev_valid = stats.valid;
             print_ram_usage();
+        }
+
+        can_bus_frame_t can_frame;
+        for (int i = 0; i < 4 && can_bus_pop_frame(&can_frame); ++i)
+        {
+            printf("CAN RX %s ID=0x%lx DLC=%u DATA=",
+                   can_frame.extended ? "EXT" : "STD",
+                   (unsigned long)can_frame.id,
+                   can_frame.dlc);
+            for (uint8_t b = 0; b < can_frame.dlc; ++b)
+            {
+                printf("%02x", can_frame.data[b]);
+                if ((uint8_t)(b + 1u) < can_frame.dlc)
+                {
+                    printf(" ");
+                }
+            }
+            printf(" TS=%luus\n", (unsigned long)can_frame.timestamp_us);
         }
 
         // Consume frame-end notifications from core1 (encoded source+seq+ring index)

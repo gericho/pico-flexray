@@ -8,16 +8,19 @@
 
 #define PICO_FLEXRAY_DONGLE_ID_PREFIX "picoflex"
 
-#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN)
+#define TUSB_DESC_TOTAL_LEN (TUD_CONFIG_DESC_LEN + TUD_VENDOR_DESC_LEN + TUD_VENDOR_DESC_LEN)
 
 enum {
-    ITF_NUM_VENDOR,
+    ITF_NUM_VENDOR_CAN,
+    ITF_NUM_VENDOR_FLEXRAY,
     ITF_NUM_TOTAL
 };
 
 enum {
-    EPNUM_VENDOR_OUT = 0x03,  // Bulk OUT endpoint for CAN data from host to device
-    EPNUM_VENDOR_IN = 0x81    // Bulk IN endpoint for CAN data from device to host
+    EPNUM_VENDOR_CAN_OUT = 0x03,
+    EPNUM_VENDOR_CAN_IN = 0x81,
+    EPNUM_VENDOR_FLEXRAY_OUT = 0x04,
+    EPNUM_VENDOR_FLEXRAY_IN = 0x82
 };
 
 //--------------------------------------------------------------------+
@@ -47,8 +50,8 @@ uint8_t const desc_cfg[] = {
     // Config number, interface count, string index, total length, attribute, power in mA
     TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, TUSB_DESC_TOTAL_LEN, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 100),
 
-    // Interface number, string index, EP Out & In address, EP size
-    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR, 4, EPNUM_VENDOR_OUT, EPNUM_VENDOR_IN, 64)
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR_CAN, 4, EPNUM_VENDOR_CAN_OUT, EPNUM_VENDOR_CAN_IN, 64),
+    TUD_VENDOR_DESCRIPTOR(ITF_NUM_VENDOR_FLEXRAY, 5, EPNUM_VENDOR_FLEXRAY_OUT, EPNUM_VENDOR_FLEXRAY_IN, 64)
 };
 
 //--------------------------------------------------------------------+
@@ -67,7 +70,8 @@ char const* string_desc_arr[] = {
     "comma.ai",              // 1: Manufacturer
     "panda",                 // 2: Product
     NULL,                    // 3: Serial, will be filled from board ID
-    "Panda Interface"        // 4: Interface
+    "Panda CAN Interface",   // 4
+    "FlexRay Interface"      // 5
 };
 
 static uint16_t _desc_str[32];

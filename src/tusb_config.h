@@ -31,7 +31,7 @@ extern "C" {
 //--------------------------------------------------------------------
 
 // Vendor class for Panda protocol
-#define CFG_TUD_VENDOR            1
+#define CFG_TUD_VENDOR            2
 #define CFG_TUD_VENDOR_RX_BUFSIZE 4096
 #define CFG_TUD_VENDOR_TX_BUFSIZE 8192
 

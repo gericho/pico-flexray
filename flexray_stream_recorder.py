@@ -9,7 +9,7 @@ from datetime import datetime
 PANDA_VID = 0x3801
 PANDA_PID = 0xddcc
 
-TARGET_ENDPOINT = 0x81
+TARGET_ENDPOINT = 0x82
 CSV_BUFFER_SIZE = 1000  # Batch write to CSV every 1000 records
 
 # High-throughput tuning

@@ -1,120 +1,49 @@
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/dynm/pico-flexray)
+# pico-flexray-can
 
-### pico-flexray — Low Cost FlexRay MITM Module
-<img src="./imgs/pico-flexray-bmw-g30.webp" alt="pico-flexray BMW G30 example" width="600"/>
-<img src="./imgs/openpilot-lateral-bmw-g30.webp" alt="OpenPilot BMW G30 example" width="600"/>
+Firmware branch for the Czok V1 board with simultaneous FlexRay and CAN logging.
 
-A Raspberry Pi Pico-based FlexRay man-in-the-middle (MITM) bridge that forwards frames between ECU and vehicle transceivers, with optional test replay output and a Panda-compatible USB interface.
+This branch keeps the original FlexRay MITM path for the V1 hardware and adds support for the onboard MCP2518FD CAN controller and TCAN1042 transceiver. The goal is to let the board bridge and stream FlexRay while also exposing a 500 kbps classical CAN bus for BMW i3 PT-CAN style use cases.
 
-- Core features:
-  - Continuous, bidirectional FlexRay frame forwarding (vehicle ↔ ECU)
-  - Optional replay/test output via a dedicated GPIO
-  - USB interface is Panda-compatible
-  - FlexRay MITM Done
+## Summary of changes
 
-### Hardware connections
-1. For read-only FlexRay frame capture, connect a single transceiver to the vehicle’s bus, attach its BP/BM lines to the FlexRay lines in your vehicle.
-2. To differentiate frames from the ECU and the vehicle, use a man-in-the-middle (MITM) setup: split the original FlexRay cable and connect each half to its own transceiver with separate BP/BM pairs—one transceiver for the ECU side, one for the vehicle side.
-3. To perform a test, connect the REPLAY_TX pin to either RXD_FROM_ECU or RXD_FROM_VEHICLE. This will allow you to observe frames in Cabana.
+- Targets the Czok V1 hardware, not the newer V2 layout.
+- Keeps the FlexRay MITM forwarding and injection behavior used by the original V1 firmware.
+- Adds support for the external MCP2518FD CAN controller connected to the RP2040/RP2350 over SPI.
+- Streams CAN and FlexRay at the same time over USB.
+- Uses a Panda-compatible CAN stream for CAN traffic.
+- Keeps the original FlexRay source markers:
+  - `src 0` = FlexRay ECU side
+  - `src 1` = FlexRay vehicle side
+- Moves CAN to a separate source ID:
+  - `src 2` = external CAN bus
 
-Refer to your board’s pinout for physical pad/header locations. Signals below use Pico GPIO numbers as configured in `src/main.c`.
+## USB behavior
 
-| GPIO | Signal | Direction | Side | Notes |
-|---:|---|---|---|---|
-| 2 | `BGE` | Output | Both | BGE to FlexRay transceivers (set High to enable)
-| 3 | `STBN` | Output | Both | STBN to transceivers (set High to exit standby)
-| 4 | `TXD_TO_ECU` | Output | ECU | TXD to ECU-side transceiver
-| 5 | `TXEN_TO_ECU` | Output | ECU | TX_EN for ECU-side transceiver
-| 6 | `RXD_FROM_ECU` | Input | ECU | RXD from ECU-side transceiver
-| 28 | `TXD_TO_VEHICLE` | Output | Vehicle | TXD to vehicle-side transceiver
-| 27 | `TXEN_TO_VEHICLE` | Output | Vehicle | TX_EN for vehicle-side transceiver
-| 26 | `RXD_FROM_VEHICLE` | Input | Vehicle | RXD from vehicle-side transceiver
-| 15 | `REPLAY_TX` | Output | Test | PIO replay/test sample FlexRay frame output
-| 7 | `ISR` | Output | Measurement | Use a logic analyzer to measure the frame preparation time consumption.
+The firmware enumerates as a single USB device with two vendor interfaces:
 
-![Wiring diagram](imgs/wiring.png)
-**Note:**  
-You can use any FlexRay transceiver you have available. The following transceivers are pin-to-pin compatible and can be used interchangeably:
-- TLE9222
-- TJA1082
-- NCV7383
+- Interface 0: Panda-style CAN RX/TX
+- Interface 1: FlexRay RX/TX stream
 
+This is intended to work with a patched host stack that can consume both interfaces from the same device.
 
-### Build and flash
+## Hardware notes
 
-```bash
-git clone https://github.com/dynm/pico-flexray/
-cd pico-flexray
-```
+For the V1 board:
 
-Option 1: Visual Studio Code
-1. Install the [Raspberry Pi Pico extension](https://marketplace.visualstudio.com/items?itemName=raspberry-pi.raspberry-pi-pico)
-2. Open this repo, do not enable RISC-V instructions
-3. Click the Pico extension tab on the left panel
-4. Click "Switch Board" and select your Pico board
-5. Hold BOOT, plug USB, then you can release BOOT
-6. Click "Run Project (USB)"
-7. Done!
+- SAS side is the ECU side
+- BDC side is the vehicle side
+- The active FlexRay MITM pair used by this firmware is:
+  - `CN4 / Flexray2` for SAS / ECU
+  - `CN3 / Flexray1` for BDC / VEHICLE
+- External CAN is exposed on `CN13`
 
-Option 2: Command line
-Prerequisites:
-- Raspberry Pi Pico SDK 2.1.x (env var `PICO_SDK_PATH` or the VS Code Pico extension auto-setup)
-- `picotool` for flashing, or UF2 drag-and-drop
+## Build output
 
-Configure and build (default board is set in `CMakeLists.txt` to `pico2`):
+The firmware builds as the normal `pico_flexray` target and produces a UF2 image such as:
 
-```bash
-cd pico-flexray
-mkdir build && cd build
-ninja -C build
-```
+`build-v1can/pico_flexray.uf2`
 
-Artifacts are produced in `build/` (e.g., `pico_flexray.uf2`, `pico_flexray.elf`).
+## Credits
 
-Flash to device:
-- UF2: Hold BOOT, plug USB, then copy `build/pico_flexray.uf2` to the RPI-RP2 mass storage device.
-- Picotool: put the board in BOOTSEL or use reset-to-boot, then:
-
-```bash
-picotool load -f build/pico_flexray.uf2
-```
-
-Run-time:
-- USB enumerates as a vendor-specific device (no CDC serial). Use UART for logs.
-- On boot, the app prints pin assignments and status, enables transceivers, and starts forwarding.
-
-### Adjusting pins or board
-
-If you use a different board or wiring, update the GPIO defines at the top of `src/main.c` and/or modify set(PICO_BOARD pico2 CACHE STRING "Board type") in CMakeLists.txt. Rebuild and reflash.
-
-### Streaming with Cabana
-
-To visualize FlexRay data using Cabana:
-
-1. Clone the OpenPilot repository and switch to the FlexRay-enabled branch:
-   ```bash
-   git clone https://github.com/dynm/openpilot
-   cd openpilot
-   git checkout cabana-flexray
-   ```
-
-2. Set up the environment:
-   ```bash
-   ./tools/op.sh setup
-   ```
-
-3. Build Cabana:
-   ```bash
-   source .venv/bin/activate
-   scons -j$(nproc) tools/cabana/cabana
-   ```
-
-4. Launch Cabana:
-   ```bash
-   ./tools/cabana/cabana
-   ```
-
-5. Testing:
-   If you want to develop without transceivers and are using only a single Pico board,
-   connect REPLAY_TX to RXD_FROM_ECU or RXD_FROM_VEHICLE with a jumper wire.
-   You will then see frames in Cabana.
+- CzokNorris: this project builds on CzokNorris's FlexRay reverse-engineering work and the V1 board design. Board reference: `https://oshwlab.com/czoknorris/v1board`
+- Dynm: FlexRay firmware foundation and related pico-flexray work. Repository: `https://github.com/dynm/pico-flexray`

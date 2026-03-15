@@ -1,49 +1,137 @@
 # pico-flexray-can
 
-Firmware branch for the Czok V1 board with simultaneous FlexRay and CAN logging.
+Firmware for the Czok V1 board (`pico2_w`) with:
 
-This branch keeps the original FlexRay MITM path for the V1 hardware and adds support for the onboard MCP2518FD CAN controller and TCAN1042 transceiver. The goal is to let the board bridge and stream FlexRay while also exposing a 500 kbps classical CAN bus for BMW i3 PT-CAN style use cases.
+- FlexRay MITM forwarding for BMW i3 reverse engineering
+- MCP2518FD-based classical CAN RX on `CN13`
+- USB streaming for both FlexRay and CAN
 
-## Summary of changes
+This repo is the working V1 branch, not a generic multi-board firmware.
 
-- Targets the Czok V1 hardware, not the newer V2 layout.
-- Keeps the FlexRay MITM forwarding and injection behavior used by the original V1 firmware.
-- Adds support for the external MCP2518FD CAN controller connected to the RP2040/RP2350 over SPI.
-- Streams CAN and FlexRay at the same time over USB.
-- Uses a Panda-compatible CAN stream for CAN traffic.
-- Keeps the original FlexRay source markers:
-  - `src 0` = FlexRay ECU side
-  - `src 1` = FlexRay vehicle side
-- Moves CAN to a separate source ID:
-  - `src 2` = external CAN bus
+## Current Status
 
-## USB behavior
+What works:
 
-The firmware enumerates as a single USB device with two vendor interfaces:
+- FlexRay MITM forwarding is stable
+- FlexRay USB streaming is stable
+- MCP2518FD bring-up is stable at `500 kbps`
+- CAN RX from the external bus is working
+- CAN is exported over a second USB endpoint and can be logged by a patched `pandad`
 
-- Interface 0: Panda-style CAN RX/TX
-- Interface 1: FlexRay RX/TX stream
+What is intentionally not implemented:
 
-This is intended to work with a patched host stack that can consume both interfaces from the same device.
+- CAN TX to the vehicle bus
+- generic CAN-FD support
+- a stock upstream host stack without `pandad` changes
 
-## Hardware notes
+## Hardware
 
-For the V1 board:
+Target board:
 
-- SAS side is the ECU side
-- BDC side is the vehicle side
-- The active FlexRay MITM pair used by this firmware is:
-  - `CN4 / Flexray2` for SAS / ECU
-  - `CN3 / Flexray1` for BDC / VEHICLE
-- External CAN is exposed on `CN13 / CAN2`
+- Czok V1
+- `PICO_BOARD=pico2_w`
 
-## Build output
+Relevant buses:
 
-The firmware builds as the normal `pico_flexray` target and produces a UF2 image such as:
+- FlexRay MITM:
+  - `src 0` = ECU side
+  - `src 1` = vehicle side
+- CAN:
+  - external MCP2518FD + TCAN1042 path
+  - connector: `CN13`
+  - intended use: BMW i3 `PT-CAN`
+  - bitrate: `500 kbit/s`
 
-`build-v1can/pico_flexray.uf2`
+Known V1 CAN path:
+
+- controller: `MCP2518FD`
+- transceiver: `TCAN1042`
+- oscillator: `40 MHz`
+
+## USB Layout
+
+The firmware enumerates as one USB device with two vendor IN streams:
+
+- `0x81`: FlexRay stream
+- `0x82`: Panda-style CAN packet stream
+
+The firmware also supports software entry into BOOTSEL through the Panda vendor request:
+
+- `PANDA_ENTER_BOOTLOADER_MODE = 0xD1`
+
+This calls `reset_usb_boot(0, 0)` in firmware.
+
+## Host Requirement
+
+To log CAN and FlexRay together, the host must read both USB endpoints.
+
+The matching host change is in `selfdrive/pandad`:
+
+- `0x81` continues to carry the FlexRay stream
+- `0x82` is read as Panda-style CAN packets
+
+Without that host-side patch, CAN RX will work in the firmware but will not appear in routes.
+
+## Key Firmware Notes
+
+The final CAN RX fix was not in the bring-up itself, but in the MCP2518FD RX handling:
+
+- read the RX object from `0x400 + FIFOUA`
+- advance the RX FIFO with an `8-bit` write to `C1FIFOCON1 + 1`
+
+This is the change that turned the CAN USB stream from malformed/repeated frames into valid Panda-style CAN packets.
+
+## Build
+
+Build output is always expected here:
+
+`/home/gericho/pico-flexray-can/build-v1can/pico_flexray.uf2`
+
+Typical rebuild:
+
+```bash
+cmake --build /home/gericho/pico-flexray-can/build-v1can --target clean
+cmake --build /home/gericho/pico-flexray-can/build-v1can -j4
+```
+
+## Flash
+
+Manual flash:
+
+1. Put the Pico into BOOTSEL
+2. Copy:
+   - `build-v1can/pico_flexray.uf2`
+   - to the `RP2350` mass-storage device
+
+Software BOOTSEL is preferred when the board is mounted in the car.
+
+Important operational note:
+
+- after flashing, a full RP power cycle may be required before judging FlexRay forwarding behavior
+
+## Verification
+
+Firmware-only checks:
+
+- `GET_CAN_HEALTH_STATS` should show:
+  - `canSpeed = 500`
+  - `totalRxCnt > 0`
+
+End-to-end host checks:
+
+- routes should contain:
+  - `src 0` and `src 1` for FlexRay
+  - `src 2` for CAN
+
+## Branch Notes
+
+Important recent commits:
+
+- `e963a99` `Stabilize MCP2518FD CAN RX bring-up`
+- `13cb6bd` `Fix MCP2518FD RX object address and FIFO advance`
 
 ## Credits
 
-- CzokNorris: this project builds on CzokNorris's FlexRay reverse-engineering work and the V1 board design. Board reference: `https://oshwlab.com/czoknorris/v1board`
-- Dynm: FlexRay firmware foundation and related pico-flexray work. Repository: `https://github.com/dynm/pico-flexray`
+- CzokNorris for the V1 board and original reverse-engineering work
+- dynm for the original `pico-flexray` firmware base
+- Pierre Molinaro / `ACAN2517` for a useful MCP2517/2518 RX reference during debugging

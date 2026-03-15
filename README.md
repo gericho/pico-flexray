@@ -95,6 +95,13 @@ The matching host change is in `selfdrive/pandad`:
 - `0x81` continues to carry the FlexRay stream
 - `0x82` is read as Panda-style CAN packets
 
+GitHub location of the matching `pandad`:
+
+- repository: `https://github.com/gericho/pandad-pico-flexray`
+- branch: `Czok-V1-can`
+- local path in your `sunnypilot` tree:
+  - `/home/gericho/sunnypilot/selfdrive/pandad`
+
 Without that host-side patch, CAN RX will work in the firmware but will not appear in routes.
 
 ## Key Firmware Notes

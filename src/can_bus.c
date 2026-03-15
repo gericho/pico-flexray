@@ -65,13 +65,14 @@ static volatile can_bus_frame_t can_frames[CAN_RX_RING_CAP];
 static volatile uint32_t can_head;
 static volatile uint32_t can_tail;
 
-static uint32_t current_bitrate = CAN_DEFAULT_BITRATE;
+static uint32_t current_bitrate = 0u;
 static uint32_t can_rx_total;
 static uint32_t can_tx_total;
 static uint32_t can_tx_attempt;
 static uint32_t can_overflow_count;
 static uint32_t can_error_count;
 static bool can_started;
+static bool can_io_initialized;
 static uint32_t tx_sequence;
 
 static inline void can_spi_delay(void)
@@ -310,8 +311,12 @@ static void can_handle_rx_object(const uint8_t *obj)
     (void)can_push_frame(&frame);
 }
 
-void can_bus_init(void)
+static void can_bus_init_pins_once(void)
 {
+    if (can_io_initialized) {
+        return;
+    }
+
     gpio_init(CAN_SPI_CS_PIN);
     gpio_set_dir(CAN_SPI_CS_PIN, GPIO_OUT);
     gpio_put(CAN_SPI_CS_PIN, 1);
@@ -332,6 +337,13 @@ void can_bus_init(void)
     gpio_set_dir(CAN_INT_PIN, GPIO_IN);
     gpio_pull_up(CAN_INT_PIN);
 
+    can_io_initialized = true;
+}
+
+void can_bus_init(void)
+{
+    can_bus_init_pins_once();
+
     can_head = 0u;
     can_tail = 0u;
     can_rx_total = 0u;
@@ -341,10 +353,8 @@ void can_bus_init(void)
     can_error_count = 0u;
     tx_sequence = 0u;
 
-    can_started = mcp_init_controller();
-    printf("CAN V1 %s at %lu kbps on MCP2518FD\n",
-           can_started ? "ready" : "init failed",
-           (unsigned long)(current_bitrate / 1000u));
+    can_started = false;
+    printf("CAN V1 idle until bitrate is configured over USB\n");
 }
 
 void can_bus_poll(void)
@@ -353,7 +363,10 @@ void can_bus_poll(void)
         return;
     }
 
-    while (!gpio_get(CAN_INT_PIN)) {
+    uint32_t processed = 0u;
+    const uint32_t max_frames_per_poll = 4u;
+
+    while (!gpio_get(CAN_INT_PIN) && processed < max_frames_per_poll) {
         uint32_t fifo_status = mcp_read32(MCP_REG_C1FIFOSTA1);
         if ((fifo_status & MCP_FIFO_TFNRFNIF_BITS) == 0u) {
             break;
@@ -364,6 +377,7 @@ void can_bus_poll(void)
         mcp_read_bytes((uint16_t)(fifo_ua & 0x0fffu), obj, sizeof(obj));
         can_handle_rx_object(obj);
         mcp_update_bits(MCP_REG_C1FIFOCON1, MCP_FIFO_UINC_BITS, MCP_FIFO_UINC_BITS);
+        processed++;
     }
 }
 
@@ -389,9 +403,11 @@ bool can_bus_set_bitrate(uint32_t bitrate)
         return false;
     }
 
+    can_bus_init_pins_once();
     current_bitrate = bitrate;
-    if (can_started) {
-        can_started = mcp_init_controller();
+    can_started = mcp_init_controller();
+    if (!can_started) {
+        printf("CAN V1 init failed at %lu kbps\n", (unsigned long)(bitrate / 1000u));
     }
     return can_started;
 }

@@ -7,7 +7,6 @@
 #include "flexray_frame.h"
 #include "flexray_fifo.h"
 #include "flexray_forwarder_with_injector.h"
-#include "can_bus.h"
 #include <string.h>
 
 // Add near top after includes
@@ -34,7 +33,6 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
 static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *request);
 static bool handle_control_data_stage(tusb_control_request_t const *request, uint8_t const *data, uint16_t len);
 static bool try_send_from_fifo(const char *context);
-static bool try_send_can_from_ring(void);
 // ------------------------------------------------------------
 // Vendor OUT protocol (host -> device)
 //  op 0x90: Push override replacement slice
@@ -88,7 +86,6 @@ void panda_usb_init(void)
 
     // Initialize FlexRay FIFO
     flexray_fifo_init(&flexray_fifo);
-    can_bus_init();
 
     // Initialize panda state
     panda_state.hw_type = HW_TYPE_RED_PANDA;
@@ -103,8 +100,6 @@ void panda_usb_init(void)
 void panda_usb_task(void)
 {
     tud_task();
-    can_bus_poll();
-    (void)try_send_can_from_ring();
 }
 
 // TinyUSB vendor control transfer callback - this overrides the weak default implementation
@@ -204,24 +199,8 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
 
     case PANDA_GET_CAN_HEALTH_STATS:
         {
-            can_bus_status_t can_status = {0};
             struct can_health_t *can_health = (struct can_health_t*)response_data;
             memset(can_health, 0, sizeof(*can_health));
-            can_bus_get_status(&can_status);
-            can_health->bus_off = can_status.bus_off ? 1u : 0u;
-            can_health->receive_error_cnt = can_status.rec;
-            can_health->transmit_error_cnt = can_status.tec;
-            can_health->total_error_cnt = can_status.error_count;
-            can_health->total_tx_lost_cnt = can_status.checksum_error_count;
-            can_health->total_tx_cnt = can_status.tx_total;
-            can_health->total_rx_cnt = can_status.rx_total;
-            can_health->total_rx_lost_cnt = can_status.overflow_count;
-            can_health->total_fwd_cnt = can_status.fwd_count;
-            can_health->can_speed = can_status.started ? (uint16_t)(can_status.bitrate / 1000u) : 0u;
-            can_health->can_data_speed = can_health->can_speed;
-            can_health->canfd_enabled = 0;
-            can_health->brs_enabled = 0;
-            can_health->canfd_non_iso = 0;
             response_len = sizeof(struct can_health_t);
         }
         break;
@@ -326,7 +305,6 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
     case PANDA_RESET_CAN_COMMS:
         // printf("Control Write: RESET_CAN_COMMS (request=0x%02x)\n", request->bRequest);
         flexray_fifo_init(&flexray_fifo);
-        can_bus_reset();
         handled = true;
         break;
 
@@ -352,17 +330,6 @@ static bool handle_control_write(uint8_t rhport, tusb_control_request_t const *r
         break;
 
     case PANDA_SET_CAN_SPEED_KBPS:
-        {
-            uint16_t bus_id = request->wValue;
-            uint16_t speed_x10 = request->wIndex;
-            uint16_t speed_kbps = (uint16_t)(speed_x10 / 10u);
-            if (bus_id == 0u || bus_id == 2u) {
-                (void)can_bus_set_bitrate((uint32_t)speed_kbps * 1000u);
-            }
-            handled = true;
-        }
-        break;
-
     case PANDA_SET_CAN_FD_DATA_BITRATE:
         handled = true;
         break;
@@ -521,13 +488,6 @@ void tud_resume_cb(void)
 void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 {
     (void)itf;
-    if (itf != 0u) {
-        while (tud_vendor_n_available(itf)) {
-            uint8_t tmp[64];
-            if (tud_vendor_n_read(itf, tmp, sizeof(tmp)) == 0) break;
-        }
-        return;
-    }
     if (bufsize > 0)
     {
         handle_vendor_out_payload(buffer, bufsize);
@@ -545,15 +505,11 @@ void tud_vendor_rx_cb(uint8_t itf, uint8_t const *buffer, uint16_t bufsize)
 // Invoked when a transfer on Bulk IN endpoint is complete
 void tud_vendor_tx_cb(uint8_t itf, uint32_t sent_bytes)
 {
+    (void)itf;
     (void)sent_bytes;
-    if (itf == 0u) {
-        try_send_from_fifo("tx_cb trigger");
-        return;
-    }
-    if (itf == 1u) {
-        (void)try_send_can_from_ring();
-        return;
-    }
+
+    // After a transfer is complete, try to send the next batch of data
+    try_send_from_fifo("tx_cb trigger");
 }
 
 bool panda_flexray_fifo_push(const flexray_frame_t *frame)
@@ -566,7 +522,7 @@ bool panda_flexray_fifo_push(const flexray_frame_t *frame)
 static bool try_send_from_fifo(const char *context)
 {
     (void)context;
-    if (!tud_vendor_n_mounted(0) || flexray_fifo_is_empty(&flexray_fifo))
+    if (!tud_vendor_mounted() || flexray_fifo_is_empty(&flexray_fifo))
     {
         return false;
     }
@@ -574,7 +530,7 @@ static bool try_send_from_fifo(const char *context)
     // Minimum record: 2-byte length + 1-byte source + 5-byte header + 0 payload + 3-byte CRC = 11 bytes
     const uint32_t MIN_RECORD_SIZE = 11u;
 
-    uint32_t available_space = tud_vendor_n_write_available(0);
+    uint32_t available_space = tud_vendor_write_available();
     if (available_space < MIN_RECORD_SIZE)
     {
         return false;
@@ -634,7 +590,7 @@ static bool try_send_from_fifo(const char *context)
         outbuf[w++] = (uint8_t)(frame.frame_crc & 0xFF);
 
         // Write
-        uint32_t written = tud_vendor_n_write(0, outbuf, (uint32_t)w);
+        uint32_t written = tud_vendor_write(outbuf, (uint32_t)w);
         if (written != w)
         {
             // On partial write, stop loop; data will be retried next call
@@ -644,7 +600,7 @@ static bool try_send_from_fifo(const char *context)
         (void)flexray_fifo_pop(&flexray_fifo, &frame);
         sent_something = true;
         total_sent += written;
-        available_space = tud_vendor_n_write_available(0);
+        available_space = tud_vendor_write_available();
 
         // If buffer space drops low, flush early to free FIFO in USB core
         if (available_space < MIN_RECORD_SIZE)
@@ -655,56 +611,7 @@ static bool try_send_from_fifo(const char *context)
 
     if (sent_something)
     {
-        tud_vendor_n_write_flush(0);
-        return true;
-    }
-    return false;
-}
-
-static uint8_t calculate_can_checksum(const uint8_t *data, uint32_t len)
-{
-    uint8_t checksum = 0u;
-    for (uint32_t i = 0; i < len; ++i) checksum ^= data[i];
-    return checksum;
-}
-
-static uint32_t encode_can_packet(const can_bus_frame_t *frame, uint8_t *packet, uint32_t cap)
-{
-    if (!frame || !packet || frame->dlc > 8u) return 0u;
-    const uint32_t packet_len = 6u + frame->dlc;
-    if (cap < packet_len) return 0u;
-    const uint32_t word = (frame->id << 3) | (frame->extended ? (1u << 2) : 0u);
-    packet[0] = (uint8_t)((frame->dlc << 4) | (2u << 1));
-    packet[1] = (uint8_t)(word & 0xffu);
-    packet[2] = (uint8_t)((word >> 8) & 0xffu);
-    packet[3] = (uint8_t)((word >> 16) & 0xffu);
-    packet[4] = (uint8_t)((word >> 24) & 0xffu);
-    packet[5] = 0u;
-    if (frame->dlc > 0u) memcpy(&packet[6], frame->data, frame->dlc);
-    packet[5] = calculate_can_checksum(packet, packet_len);
-    return packet_len;
-}
-
-static bool try_send_can_from_ring(void)
-{
-    if (!tud_vendor_n_mounted(1)) return false;
-    uint32_t available = tud_vendor_n_write_available(1);
-    if (available < 6u) return false;
-
-    bool sent = false;
-    while (available >= 6u) {
-        can_bus_frame_t frame;
-        uint8_t packet[14];
-        uint32_t len;
-        if (!can_bus_pop_frame(&frame)) break;
-        len = encode_can_packet(&frame, packet, sizeof(packet));
-        if (len == 0u || available < len) break;
-        if (tud_vendor_n_write(1, packet, len) != len) break;
-        sent = true;
-        available = tud_vendor_n_write_available(1);
-    }
-    if (sent) {
-        tud_vendor_n_write_flush(1);
+        tud_vendor_write_flush();
         return true;
     }
     return false;

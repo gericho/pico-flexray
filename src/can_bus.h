@@ -21,6 +21,8 @@ typedef struct {
     uint32_t tx_attempt;
     uint32_t overflow_count;
     uint32_t error_count;
+    uint32_t fwd_count;
+    uint32_t checksum_error_count;
     uint8_t rec;
     uint8_t tec;
     bool bus_off;

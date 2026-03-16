@@ -101,10 +101,10 @@ The matching host change is in `selfdrive/pandad`:
 
 GitHub location of the matching `pandad`:
 
-- repository: `https://github.com/gericho/pandad-pico-flexray`
+- repository: matching `pandad` fork with Pico dual-endpoint support
 - branch: `Czok-V1-can`
-- local path in your `sunnypilot` tree:
-  - `/home/gericho/sunnypilot/selfdrive/pandad`
+- path inside the host tree:
+  - `selfdrive/pandad`
 
 Without that host-side patch, CAN RX will work in the firmware but will not appear in routes.
 
@@ -121,13 +121,13 @@ This is the change that turned the CAN USB stream from malformed/repeated frames
 
 Build output is always expected here:
 
-`/home/gericho/pico-flexray-can/build-v1can/pico_flexray.uf2`
+`build-v1can/pico_flexray.uf2`
 
 Typical rebuild:
 
 ```bash
-cmake --build /home/gericho/pico-flexray-can/build-v1can --target clean
-cmake --build /home/gericho/pico-flexray-can/build-v1can -j4
+cmake --build build-v1can --target clean
+cmake --build build-v1can -j4
 ```
 
 ## Flash

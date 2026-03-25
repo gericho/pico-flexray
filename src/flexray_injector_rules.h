@@ -29,15 +29,15 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	// These rules intentionally patch only the command-local slice while keeping
 	// the rest of the cached OEM frame intact.
 	//
-	// cycle_mask = 0 / cycle_base = 0 means "accept any cycle" for now.
-	// This keeps the firmware usable before the host starts supplying a tighter
-	// phase-aware selection policy.
+	// Match dynm-style cycle gating: only inject on cycle_count mod 4 == 1.
+	// This is intentionally stricter than the temporary bring-up rules and keeps
+	// the injector aligned with a stable FlexRay subcycle.
 	{
 		// Longitudinal brake-blend frame
 		.trigger_id = 53,
 		.target_id = 54,
-		.cycle_mask = 0x00,
-		.cycle_base = 0x00,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
@@ -49,8 +49,8 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		// Longitudinal powertrain/coast frame
 		.trigger_id = 54,
 		.target_id = 59,
-		.cycle_mask = 0x00,
-		.cycle_base = 0x00,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
@@ -62,8 +62,8 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		// Lateral outer envelope
 		.trigger_id = 59,
 		.target_id = 72,
-		.cycle_mask = 0x00,
-		.cycle_base = 0x00,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
@@ -75,8 +75,8 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		// Lateral payload frame
 		.trigger_id = 95,
 		.target_id = 96,
-		.cycle_mask = 0x00,
-		.cycle_base = 0x00,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
 		.e2e_offset = 0,
 		.e2e_len = 7,
 		.e2e_init_value = 0xd6,

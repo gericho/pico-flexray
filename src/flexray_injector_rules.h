@@ -20,8 +20,11 @@ typedef struct {
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
 	// BMW i3 mimic rules.
-	// For the first pass we keep the dynm-style injector engine but move away
-	// from the old SP2018-only 0x47 -> 0x48 rule.
+	// Trigger chain comes from observed raw route order:
+	//   53 -> 54 -> 59 -> 72
+	//   95 -> 96
+	// This is closer to the dynm method than target==trigger and avoids
+	// reinjecting on the same frame id that is being observed on the bus.
 	//
 	// These rules intentionally patch only the command-local slice while keeping
 	// the rest of the cached OEM frame intact.
@@ -31,7 +34,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	// phase-aware selection policy.
 	{
 		// Longitudinal brake-blend frame
-		.trigger_id = 54,
+		.trigger_id = 53,
 		.target_id = 54,
 		.cycle_mask = 0x00,
 		.cycle_base = 0x00,
@@ -44,7 +47,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	},
 	{
 		// Longitudinal powertrain/coast frame
-		.trigger_id = 59,
+		.trigger_id = 54,
 		.target_id = 59,
 		.cycle_mask = 0x00,
 		.cycle_base = 0x00,
@@ -57,7 +60,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	},
 	{
 		// Lateral outer envelope
-		.trigger_id = 72,
+		.trigger_id = 59,
 		.target_id = 72,
 		.cycle_mask = 0x00,
 		.cycle_base = 0x00,
@@ -70,7 +73,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 	},
 	{
 		// Lateral payload frame
-		.trigger_id = 96,
+		.trigger_id = 95,
 		.target_id = 96,
 		.cycle_mask = 0x00,
 		.cycle_base = 0x00,

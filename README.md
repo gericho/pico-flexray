@@ -1,5 +1,34 @@
 # pico-flexray-can
 
+## Branch Summary
+
+Branch:
+
+- `Czok-V1-CAN-mimic`
+
+Purpose:
+
+- keep a dedicated firmware branch for BMW i3 injector-style work
+- separate future i3-specific FlexRay mimic/injection changes from the stable `Czok-V1-CAN` base
+
+What has been done on this branch so far:
+
+- branch created from `Czok-V1-CAN`
+- firmware rebuilt from this branch
+- firmware flashed successfully to the RP2350/Pico in BOOTSEL mode
+
+Why this branch exists:
+
+- the current injector path in firmware is still hardcoded to the legacy SP2018-style rule set
+- upcoming work needs a safe branch to move toward BMW i3-specific `long` and `lateral` mimic rules
+- this avoids mixing experimental injector changes with the known-good base branch
+
+Current state:
+
+- content is still aligned with `Czok-V1-CAN`
+- no i3-specific injector rule changes have been merged yet
+- this branch is the intended working area for those changes
+
 Firmware for the Czok V1 board (`pico2_w`) with:
 
 - single-channel FlexRay MITM forwarding for BMW i3 reverse engineering

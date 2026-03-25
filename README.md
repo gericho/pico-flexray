@@ -25,9 +25,13 @@ Why this branch exists:
 
 Current state:
 
-- content is still aligned with `Czok-V1-CAN`
-- no i3-specific injector rule changes have been merged yet
-- this branch is the intended working area for those changes
+- firmware injector rules are now being moved away from the old single SP2018 rule
+- first i3-specific mimic targets are:
+  - `54`
+  - `59`
+  - `72`
+  - `96`
+- this branch remains the intended working area for validating those injector changes before they are considered for the base branch
 
 Firmware for the Czok V1 board (`pico2_w`) with:
 

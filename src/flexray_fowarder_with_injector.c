@@ -228,8 +228,21 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
 
     const trigger_rule_t *matched_rule = NULL;
     for (int i = 0; i < (int)NUM_TRIGGER_RULES; i++) {
-        if (INJECT_TRIGGERS[i].target_id == id && INJECT_TRIGGERS[i].cycle_base == base) {
-            matched_rule = &INJECT_TRIGGERS[i];
+        const trigger_rule_t *rule = &INJECT_TRIGGERS[i];
+        if (rule->target_id != id) {
+            continue;
+        }
+        // Legacy SP2018 rules can still require an exact base match.
+        // The new i3 mimic rules use cycle_mask=0/cycle_base=0 and therefore
+        // accept any host-provided base for the target frame.
+        if (rule->cycle_mask != 0 && rule->cycle_base != base) {
+            continue;
+        }
+        if (rule->cycle_mask == 0 && rule->cycle_base != 0) {
+            continue;
+        }
+        {
+            matched_rule = rule;
             break;
         }
     }

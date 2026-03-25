@@ -19,17 +19,66 @@ typedef struct {
 } trigger_rule_t;
 
 static const trigger_rule_t INJECT_TRIGGERS[] = {
-	// I connect the ECU side to the Domain Controller, so reverse the direction
+	// BMW i3 mimic rules.
+	// For the first pass we keep the dynm-style injector engine but move away
+	// from the old SP2018-only 0x47 -> 0x48 rule.
+	//
+	// These rules intentionally patch only the command-local slice while keeping
+	// the rest of the cached OEM frame intact.
+	//
+	// cycle_mask = 0 / cycle_base = 0 means "accept any cycle" for now.
+	// This keeps the firmware usable before the host starts supplying a tighter
+	// phase-aware selection policy.
 	{
-		.trigger_id = 0x47,
-		.target_id = 0x48,
-		.cycle_mask = 0b11,
-		.cycle_base = 1,
+		// Longitudinal brake-blend frame
+		.trigger_id = 54,
+		.target_id = 54,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
 		.e2e_offset = 0,
 		.e2e_len = 15,
 		.e2e_init_value = 0xd6,
-		.replace_offset = 2,
-		.replace_len = 14,
+		.replace_offset = 3,
+		.replace_len = 4,
+		.direction = INJECT_DIRECTION_TO_ECU,
+	},
+	{
+		// Longitudinal powertrain/coast frame
+		.trigger_id = 59,
+		.target_id = 59,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 15,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 3,
+		.replace_len = 4,
+		.direction = INJECT_DIRECTION_TO_ECU,
+	},
+	{
+		// Lateral outer envelope
+		.trigger_id = 72,
+		.target_id = 72,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 15,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_ECU,
+	},
+	{
+		// Lateral payload frame
+		.trigger_id = 96,
+		.target_id = 96,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
 		.direction = INJECT_DIRECTION_TO_ECU,
 	},
 };
@@ -37,5 +86,4 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 #define NUM_TRIGGER_RULES (sizeof(INJECT_TRIGGERS)/sizeof(INJECT_TRIGGERS[0]))
 
 #endif // FLEXRAY_INJECTOR_RULES_H
-
 

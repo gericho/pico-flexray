@@ -26,6 +26,7 @@
 #define PANDA_SET_OBD_CAN_MUX_MODE      0xdb
 #define PANDA_SET_SAFETY_MODEL          0xdc
 #define PANDA_GET_VERSIONS              0xdd
+#define PANDA_GET_INJECTOR_DIAG         0xda
 #define PANDA_SET_CAN_SPEED_KBPS        0xde
 #define PANDA_SET_ALT_EXPERIENCE        0xdf
 #define PANDA_UART_READ                 0xe0

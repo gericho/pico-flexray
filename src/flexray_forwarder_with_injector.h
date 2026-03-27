@@ -24,7 +24,24 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
 void injector_set_enabled(bool enabled);
 bool injector_is_enabled(void);
 
+typedef struct {
+    uint32_t override_rx_count;
+    uint32_t inject_fire_count;
+    uint16_t last_target_id;
+    uint8_t last_cycle_count;
+    uint8_t last_direction;
+    uint8_t last_replace_len;
+    uint8_t dbg135_trigger_seen;
+    uint8_t dbg135_cycle_match;
+    uint8_t dbg135_template_cached;
+    uint8_t dbg135_override_present;
+    uint8_t _pad[3];
+    uint32_t dbg135_submit_count;
+    uint32_t dbg135_pop_attempt_count;
+    uint32_t dbg135_pop_hit_count;
+} injector_diag_counters_t;
+
+void injector_get_diag_counters(injector_diag_counters_t *out);
+
 
 #endif // FLEXRAY_FORWARDER_WITH_INJECTOR_H
-
-

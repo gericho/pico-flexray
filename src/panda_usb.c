@@ -297,6 +297,18 @@ static bool handle_control_read(uint8_t rhport, tusb_control_request_t const *re
         // printf("Control Read: PANDA_GET_VERSIONS\n");
         break;
 
+    case PANDA_GET_INJECTOR_DIAG:
+        {
+            injector_diag_counters_t diag = {0};
+            injector_get_diag_counters(&diag);
+            response_len = sizeof(diag);
+            if (response_len > sizeof(response_data)) {
+                response_len = sizeof(response_data);
+            }
+            memcpy(response_data, &diag, response_len);
+        }
+        break;
+
     case PANDA_UART_READ:
         response_len = 0;
         memset(response_data, 'c', response_len);

@@ -39,11 +39,24 @@ typedef struct {
     uint8_t data[MAX_FRAME_PAYLOAD_BYTES + 8];
 } host_override_t;
 
-#define HOST_OVERRIDE_CAP 4
+#define HOST_OVERRIDE_CAP 32
 static volatile uint32_t host_override_head = 0;
 static volatile uint32_t host_override_tail = 0;
 static host_override_t host_overrides[HOST_OVERRIDE_CAP];
 static volatile bool injector_enabled = true;
+static volatile uint32_t injector_override_rx_count = 0;
+static volatile uint32_t injector_fire_count = 0;
+static volatile uint16_t injector_last_target_id = 0;
+static volatile uint8_t injector_last_cycle_count = 0;
+static volatile uint8_t injector_last_direction = 0;
+static volatile uint8_t injector_last_replace_len = 0;
+static volatile uint8_t injector_dbg135_trigger_seen = 0;
+static volatile uint8_t injector_dbg135_cycle_match = 0;
+static volatile uint8_t injector_dbg135_template_cached = 0;
+static volatile uint8_t injector_dbg135_override_present = 0;
+static volatile uint32_t injector_dbg135_submit_count = 0;
+static volatile uint32_t injector_dbg135_pop_attempt_count = 0;
+static volatile uint32_t injector_dbg135_pop_hit_count = 0;
 
 static inline bool host_override_push(uint16_t id, uint8_t mask, uint8_t base, uint16_t len, const uint8_t *bytes)
 {
@@ -153,13 +166,22 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         if (INJECT_TRIGGERS[i].trigger_id != frame_id){
             continue;
         }
+        if (INJECT_TRIGGERS[i].target_id == 135) {
+            injector_dbg135_trigger_seen = 1;
+        }
         if ((uint8_t)(cycle_count & INJECT_TRIGGERS[i].cycle_mask) != INJECT_TRIGGERS[i].cycle_base){
             continue;
+        }
+        if (INJECT_TRIGGERS[i].target_id == 135) {
+            injector_dbg135_cycle_match = 1;
         }
 
         int target_slot = find_cache_slot_for_id(INJECT_TRIGGERS[i].target_id, cycle_count);
         if (target_slot < 0){
             continue;
+        }
+        if (INJECT_TRIGGERS[i].target_id == 135) {
+            injector_dbg135_template_cached = 1;
         }
 
         frame_template_t *tpl = &TEMPLATES[target_slot];
@@ -169,8 +191,15 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         }
 
         bool has_data = host_override_try_pop_for(INJECT_TRIGGERS[i].target_id, cycle_count, replace_bytes);
+        if (INJECT_TRIGGERS[i].target_id == 135) {
+            injector_dbg135_pop_attempt_count++;
+        }
         if (!has_data) {
             continue;
+        }
+        if (INJECT_TRIGGERS[i].target_id == 135) {
+            injector_dbg135_override_present = 1;
+            injector_dbg135_pop_hit_count++;
         }
 
         memcpy(tpl_payload+INJECT_TRIGGERS[i].replace_offset, replace_bytes, INJECT_TRIGGERS[i].replace_len);
@@ -178,6 +207,11 @@ void __time_critical_func(try_inject_frame)(uint16_t frame_id, uint8_t cycle_cou
         fix_e2e_payload(tpl_payload+INJECT_TRIGGERS[i].e2e_offset, INJECT_TRIGGERS[i].e2e_init_value, INJECT_TRIGGERS[i].e2e_len);
         fix_cycle_count(tpl->data, cycle_count);
         fix_flexray_frame_crc(tpl->data, tpl->len);
+        injector_fire_count++;
+        injector_last_target_id = INJECT_TRIGGERS[i].target_id;
+        injector_last_cycle_count = cycle_count;
+        injector_last_direction = INJECT_TRIGGERS[i].direction;
+        injector_last_replace_len = INJECT_TRIGGERS[i].replace_len;
         inject_frame(tpl->data, tpl->len, INJECT_TRIGGERS[i].direction);
         break; // fire once per triggering frame
         
@@ -249,13 +283,44 @@ bool injector_submit_override(uint16_t id, uint8_t base, uint16_t len, const uin
     if (matched_rule == NULL) {
         return false;
     }
+    if (id == 135) {
+        injector_dbg135_submit_count++;
+        injector_dbg135_trigger_seen = 0;
+        injector_dbg135_cycle_match = 0;
+        injector_dbg135_template_cached = 0;
+        injector_dbg135_override_present = 0;
+    }
     len = len - 1 - matched_rule->replace_offset;
 
     if (len != matched_rule->replace_len) {
         return false;
     }
+    injector_override_rx_count++;
     // bytes+1: skip the first byte, which is the cycle count
     return host_override_push(id, matched_rule->cycle_mask, matched_rule->cycle_base, matched_rule->replace_len, bytes + 1 + matched_rule->replace_offset);
+}
+
+void injector_get_diag_counters(injector_diag_counters_t *out)
+{
+    if (out == NULL) {
+        return;
+    }
+    out->override_rx_count = injector_override_rx_count;
+    out->inject_fire_count = injector_fire_count;
+    out->last_target_id = injector_last_target_id;
+    out->last_cycle_count = injector_last_cycle_count;
+    out->last_direction = injector_last_direction;
+    out->last_replace_len = injector_last_replace_len;
+    out->dbg135_trigger_seen = injector_dbg135_trigger_seen;
+    out->dbg135_cycle_match = injector_dbg135_cycle_match;
+    out->dbg135_template_cached = injector_dbg135_template_cached;
+    out->dbg135_override_present = injector_dbg135_override_present;
+    out->_pad[0] = 0;
+    out->_pad[1] = 0;
+    out->_pad[2] = 0;
+    out->dbg135_submit_count = injector_dbg135_submit_count;
+    out->dbg135_pop_attempt_count = injector_dbg135_pop_attempt_count;
+    out->dbg135_pop_hit_count = injector_dbg135_pop_hit_count;
 }
 
 void injector_set_enabled(bool enabled)

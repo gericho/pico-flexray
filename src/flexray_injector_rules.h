@@ -43,7 +43,7 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 0,
 		.replace_len = 9,
-		.direction = INJECT_DIRECTION_TO_ECU,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
 	},
 	{
 		// Longitudinal powertrain/coast frame
@@ -56,25 +56,12 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 0,
 		.replace_len = 9,
-		.direction = INJECT_DIRECTION_TO_ECU,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
 	},
 	{
-		// Lateral outer envelope
-		.trigger_id = 59,
-		.target_id = 72,
-		.cycle_mask = 0x03,
-		.cycle_base = 0x01,
-		.e2e_offset = 0,
-		.e2e_len = 15,
-		.e2e_init_value = 0xd6,
-		.replace_offset = 0,
-		.replace_len = 9,
-		.direction = INJECT_DIRECTION_TO_ECU,
-	},
-	{
-		// Lateral payload frame
-		.trigger_id = 95,
-		.target_id = 96,
+		// Lateral TJA higher-level gate A
+		.trigger_id = 116,
+		.target_id = 131,
 		.cycle_mask = 0x03,
 		.cycle_base = 0x01,
 		.e2e_offset = 0,
@@ -82,7 +69,88 @@ static const trigger_rule_t INJECT_TRIGGERS[] = {
 		.e2e_init_value = 0xd6,
 		.replace_offset = 0,
 		.replace_len = 9,
-		.direction = INJECT_DIRECTION_TO_ECU,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral TJA higher-level gate B.
+		// Use self-target injection here like 72/96 so the cached 135 template
+		// is patched on its own arrivals instead of depending on the 131->135
+		// trigger/template timing pair.
+		.trigger_id = 135,
+		.target_id = 135,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral bridge frame between envelope and helper context
+		.trigger_id = 72,
+		.target_id = 97,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral TJA context helper A
+		.trigger_id = 97,
+		.target_id = 112,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral TJA context helper B
+		.trigger_id = 112,
+		.target_id = 116,
+		.cycle_mask = 0x03,
+		.cycle_base = 0x01,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral outer envelope
+		.trigger_id = 72,
+		.target_id = 72,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 15,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
+	},
+	{
+		// Lateral payload frame
+		.trigger_id = 96,
+		.target_id = 96,
+		.cycle_mask = 0x00,
+		.cycle_base = 0x00,
+		.e2e_offset = 0,
+		.e2e_len = 7,
+		.e2e_init_value = 0xd6,
+		.replace_offset = 0,
+		.replace_len = 9,
+		.direction = INJECT_DIRECTION_TO_VEHICLE,
 	},
 };
 
